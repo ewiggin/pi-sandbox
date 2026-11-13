@@ -45,7 +45,7 @@ fn resolve(path: &Path) -> Result<PathBuf> {
             Ok(m) if m.is_symlink() => {
                 links += 1;
                 if links > 40 {
-                    return Err("demasiados enlaces simbólicos en la ruta".into());
+                    return Err("too many symbolic links in path".into());
                 }
                 let target = fs::read_link(&result)?;
                 result.pop();
@@ -111,7 +111,7 @@ fn close_extra_fds() -> Result<()> {
             e.file_name()
                 .to_str()
                 .and_then(|s| s.parse::<i32>().ok())
-                .ok_or_else(|| std::io::Error::other("descriptor inválido en /proc/self/fd"))
+                .ok_or_else(|| std::io::Error::other("invalid file descriptor in /proc/self/fd"))
         })
         .collect::<std::io::Result<Vec<_>>>()?;
     for fd in fds.into_iter().filter(|fd| *fd > 2) {
@@ -137,31 +137,31 @@ pub fn run(options: Options) -> Result<()> {
     if options.check {
         println!("OK Bubblewrap: {}", dependencies.bwrap.display());
         println!(
-            "OK Pi (ELF autónomo): {}",
+            "OK Pi (standalone ELF): {}",
             dependencies.pi_dir.join("pi").display()
         );
         println!(
-            "Dependencias encontradas. La disponibilidad de namespaces se comprueba al iniciar el sandbox."
+            "Dependencies found. Namespace availability is checked when starting the sandbox."
         );
         return Ok(());
     }
     let bwrap = dependencies.bwrap;
     let pi_dir = dependencies.pi_dir;
-    let home = env::var_os("HOME").ok_or("HOME no está definido")?;
+    let home = env::var_os("HOME").ok_or("HOME is not set")?;
     let home = fs::canonicalize(home)?;
     let project = fs::canonicalize(expand_user(
         &options.project.unwrap_or(env::current_dir()?),
         &home,
     ))?;
     if !project.is_dir() {
-        return Err("--project debe ser un directorio".into());
+        return Err("--project must be a directory".into());
     }
     if home.starts_with(&project) {
-        return Err("no se permite exponer tu HOME ni uno de sus directorios padre".into());
+        return Err("exposing your HOME or any of its parent directories is not allowed".into());
     }
     for base in ["/usr", "/etc", "/dev", "/proc", "/sys", "/run"] {
         if project.starts_with(base) {
-            return Err(format!("el proyecto no puede estar bajo {base}").into());
+            return Err(format!("the project cannot be under {base}").into());
         }
     }
     let state_root = resolve(&expand_user(
@@ -171,18 +171,20 @@ pub fn run(options: Options) -> Result<()> {
         &home,
     ))?;
     if state_root.starts_with(&project) || project.starts_with(&state_root) {
-        return Err("el estado y el proyecto deben estar separados, sin contenerse".into());
+        return Err(
+            "state and project directories must be separate; neither may contain the other".into(),
+        );
     }
     if pi_dir.starts_with(&project) || project.starts_with(&pi_dir) {
-        return Err("la instalación de Pi debe estar fuera del proyecto".into());
+        return Err("the Pi installation must be outside the project".into());
     }
     let mut forwarded = Vec::new();
     for name in options.environment {
         if !valid_env(&name) {
-            return Err(format!("nombre de variable inválido: {name:?}").into());
+            return Err(format!("invalid environment variable name: {name:?}").into());
         }
         let value = env::var_os(&name)
-            .ok_or_else(|| format!("la variable {} no está definida", name.to_string_lossy()))?;
+            .ok_or_else(|| format!("environment variable {} is not set", name.to_string_lossy()))?;
         forwarded.push((name, value));
     }
     let patterns = ignores::load(&project, &options.ignores)?;
@@ -282,12 +284,12 @@ pub fn run(options: Options) -> Result<()> {
         }
     }
     eprintln!(
-        "pi-sandbox: {} → /workspace | exclusiones al inicio: {count} | red: {}",
+        "pi-sandbox: {} -> /workspace | startup exclusions: {count} | network: {}",
         project.display(),
         if options.network {
-            "HOST (sin filtro)"
+            "HOST (unfiltered)"
         } else {
-            "bloqueada"
+            "disabled"
         }
     );
     close_extra_fds()?;

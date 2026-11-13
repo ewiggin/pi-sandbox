@@ -15,22 +15,22 @@ cleanup() {
 
 main() {
     for tool in uname curl sha256sum mktemp mkdir cp chmod mv rm; do
-        command -v "$tool" >/dev/null 2>&1 || fail "Falta la herramienta: $tool"
+        command -v "$tool" >/dev/null 2>&1 || fail "Required tool not found: $tool"
     done
-    [ "$(uname -s)" = Linux ] || fail 'Solo se admite Linux.'
+    [ "$(uname -s)" = Linux ] || fail 'Only Linux is supported.'
     case "$(uname -m)" in
         x86_64 | amd64) asset=pi-sandbox-linux-x86_64 ;;
-        *) fail 'Solo hay releases para Linux x86_64; compila desde el código fuente para otra arquitectura.' ;;
+        *) fail 'Releases are only available for Linux x86_64; build from source for other architectures.' ;;
     esac
-    [ -n "${HOME:-}" ] || fail 'HOME no está definido.'
+    [ -n "${HOME:-}" ] || fail 'HOME is not set.'
     destination=${PI_SANDBOX_INSTALL_DIR:-"$HOME/.local/bin"}
     case "$destination" in
         /*) ;;
-        *) fail 'PI_SANDBOX_INSTALL_DIR debe ser una ruta absoluta.' ;;
+        *) fail 'PI_SANDBOX_INSTALL_DIR must be an absolute path.' ;;
     esac
     version=${PI_SANDBOX_VERSION:-latest}
     case "$version" in
-        *[!a-zA-Z0-9._-]* | . | ..) fail 'PI_SANDBOX_VERSION debe ser un tag como v0.1.0 o latest.' ;;
+        *[!a-zA-Z0-9._-]* | . | ..) fail 'PI_SANDBOX_VERSION must be a tag such as v0.1.0 or latest.' ;;
     esac
     base=https://github.com/ewiggin/pi-sandbox/releases
     if [ "$version" = latest ]; then
@@ -46,41 +46,41 @@ main() {
     trap 'exit 143' TERM
     trap 'exit 129' HUP
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/pi-sandbox-install.XXXXXXXX")
-    printf 'Descargando pi-sandbox (%s, Linux x86_64)...\n' "$version"
+    printf 'Downloading pi-sandbox (%s, Linux x86_64)...\n' "$version"
     for file in "$asset" "$asset.sha256"; do
         curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
             --tlsv1.2 --output "$tmp/$file" "$base/$file" ||
-            fail "No se pudo descargar $file. Comprueba la conexión y que exista una release con estos assets."
+            fail "Could not download $file. Check your connection and that a release with these assets exists."
     done
 
     # Do not blindly trust filenames in the downloaded checksum manifest.
     # Verify exactly the binary we will install, never another named file.
     expected=''
     filename=''
-    read -r expected filename < "$tmp/$asset.sha256" || fail 'Checksum incompleto.'
-    [ "$filename" = "$asset" ] || fail 'El checksum no corresponde al binario esperado.'
-    [ "${#expected}" -eq 64 ] || fail 'Checksum SHA-256 inválido.'
-    case "$expected" in *[!0-9a-f]*) fail 'Checksum SHA-256 inválido.' ;; esac
+    read -r expected filename < "$tmp/$asset.sha256" || fail 'Incomplete checksum.'
+    [ "$filename" = "$asset" ] || fail 'The checksum does not match the expected binary filename.'
+    [ "${#expected}" -eq 64 ] || fail 'Invalid SHA-256 checksum.'
+    case "$expected" in *[!0-9a-f]*) fail 'Invalid SHA-256 checksum.' ;; esac
     printf '%s  %s\n' "$expected" "$asset" | (cd "$tmp" && sha256sum -c -) ||
-        fail 'Falló la verificación SHA-256. No se ha instalado el binario.'
+        fail 'SHA-256 verification failed. The binary has not been installed.'
 
     mkdir -p -- "$destination"
     # Stage on the destination filesystem, then rename atomically. A failed
     # download/check/copy leaves the previous installation untouched.
-    [ ! -d "$destination/pi-sandbox" ] || fail 'El destino pi-sandbox es un directorio.'
+    [ ! -d "$destination/pi-sandbox" ] || fail 'The pi-sandbox destination is a directory.'
     stage=$(mktemp "$destination/.pi-sandbox.XXXXXXXX")
     cp -- "$tmp/$asset" "$stage"
     chmod 755 "$stage"
     mv -f -- "$stage" "$destination/pi-sandbox"
     stage=''
-    printf 'Instalado en %s/pi-sandbox\n' "$destination"
+    printf 'Installed to %s/pi-sandbox\n' "$destination"
     case ":${PATH:-}:" in
         *:"$destination":*) ;;
-        *) printf 'Añade %s a tu PATH para usar el comando pi-sandbox.\n' "$destination" ;;
+        *) printf 'Add %s to your PATH to use the pi-sandbox command.\n' "$destination" ;;
     esac
-    printf '\nComprobando Pi y Bubblewrap...\n'
+    printf '\nChecking Pi and Bubblewrap...\n'
     if ! "$destination/pi-sandbox" --check; then
-        printf '\nLauncher instalado. Resuelve las dependencias indicadas y ejecuta pi-sandbox --check de nuevo.\n' >&2
+        printf '\nLauncher installed. Resolve the dependencies listed above and run pi-sandbox --check again.\n' >&2
     fi
 }
 

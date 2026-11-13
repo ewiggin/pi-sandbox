@@ -31,7 +31,7 @@ fn check_succeeds_without_opening_project_or_creating_state() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("OK Bubblewrap:"));
-    assert!(stdout.contains("OK Pi (ELF autónomo):"));
+    assert!(stdout.contains("OK Pi (standalone ELF):"));
     assert!(!state.exists());
 }
 
@@ -118,7 +118,7 @@ fn check_rejects_pi_wrappers_and_non_executable_files() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("wrapper npm"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("npm wrapper"));
     fs::set_permissions(pi, fs::Permissions::from_mode(0o644)).unwrap();
     let output = Command::new(binary())
         .arg("--check")
@@ -127,5 +127,5 @@ fn check_rejects_pi_wrappers_and_non_executable_files() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no existe o no es ejecutable"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is missing or not executable"));
 }

@@ -382,7 +382,7 @@ fn reject_unsafe_ignores_and_symlink_config() {
     symlink("does-not-exist", sandbox.project.join(".pi-sandboxignore")).unwrap();
     let output = sandbox.run(&["--exec", "true"]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("enlace simbólico"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("symbolic link"));
 }
 
 #[test]

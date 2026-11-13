@@ -74,7 +74,7 @@ fn private_directory(path: &Path, recursive: bool) -> Result<()> {
         Ok(metadata) => {
             if metadata.is_symlink() || !metadata.is_dir() {
                 return Err(format!(
-                    "el estado debe ser un directorio, no un enlace simbólico: {}",
+                    "state must be a directory, not a symbolic link: {}",
                     path.display()
                 )
                 .into());

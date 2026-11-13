@@ -27,19 +27,19 @@ fn pi_directory(explicit: Option<&Path>) -> Result<PathBuf> {
     let directory = match explicit {
         Some(path) => {
             let path = if let Ok(rest) = path.strip_prefix("~") {
-                PathBuf::from(env::var_os("HOME").ok_or("HOME no está definido para expandir ~")?).join(rest)
+                PathBuf::from(env::var_os("HOME").ok_or("HOME is not set; cannot expand ~")?).join(rest)
             } else {
                 path.to_path_buf()
             };
-            fs::canonicalize(&path).map_err(|e| format!("Pi: no se puede acceder a {}: {e}", path.display()))?
+            fs::canonicalize(&path).map_err(|e| format!("Pi: cannot access {}: {e}", path.display()))?
         }
-        None => which("pi").ok_or("Pi: no se encuentra el ejecutable pi en PATH. Instala la distribución autónoma desde https://pi.dev o usa --pi-dir /ruta/a/pi")?
-            .parent().ok_or("Pi: no se puede determinar su directorio")?.to_path_buf(),
+        None => which("pi").ok_or("Pi: executable pi not found in PATH. Install the standalone distribution from https://pi.dev or use --pi-dir /path/to/pi")?
+            .parent().ok_or("Pi: cannot determine its installation directory")?.to_path_buf(),
     };
     let binary = directory.join("pi");
     if !executable(&binary) {
         return Err(format!(
-            "Pi: {} no existe o no es ejecutable; --pi-dir debe contener el ejecutable pi",
+            "Pi: {} is missing or not executable; --pi-dir must contain the pi executable",
             binary.display()
         )
         .into());
@@ -50,7 +50,11 @@ fn pi_directory(explicit: Option<&Path>) -> Result<PathBuf> {
         .map(|_| magic == *b"\x7fELF")
         .unwrap_or(false);
     if !valid_elf {
-        return Err(format!("Pi: {} no es un binario ELF de la distribución autónoma; el wrapper npm no está soportado", binary.display()).into());
+        return Err(format!(
+            "Pi: {} is not a standalone ELF binary; the npm wrapper is not supported",
+            binary.display()
+        )
+        .into());
     }
     Ok(directory)
 }
@@ -62,17 +66,13 @@ pub fn check(pi_dir: Option<&Path>) -> Result<Dependencies> {
     let pi = pi_directory(pi_dir);
     let mut errors = Vec::new();
     if bwrap.is_none() {
-        errors.push("Bubblewrap: no se encuentra el ejecutable bwrap en PATH. En Arch: sudo pacman -S bubblewrap; en Debian/Ubuntu: sudo apt install bubblewrap".to_owned());
+        errors.push("Bubblewrap: executable bwrap not found in PATH. On Arch: sudo pacman -S bubblewrap; on Debian/Ubuntu: sudo apt install bubblewrap".to_owned());
     }
     if let Err(error) = &pi {
         errors.push(error.to_string());
     }
     if !errors.is_empty() {
-        return Err(format!(
-            "dependencias no disponibles:\n  - {}",
-            errors.join("\n  - ")
-        )
-        .into());
+        return Err(format!("dependencies unavailable:\n  - {}", errors.join("\n  - ")).into());
     }
     Ok(Dependencies {
         bwrap: bwrap.unwrap(),

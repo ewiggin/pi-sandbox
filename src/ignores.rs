@@ -19,10 +19,10 @@ pub fn load(project: &Path, extra: &[String]) -> Result<Vec<Pattern>> {
     match fs::symlink_metadata(&config) {
         Ok(meta) => {
             if meta.is_symlink() {
-                return Err(".pi-sandboxignore no puede ser un enlace simbólico".into());
+                return Err(".pi-sandboxignore must not be a symbolic link".into());
             }
             if !meta.is_file() {
-                return Err(".pi-sandboxignore debe ser un archivo regular".into());
+                return Err(".pi-sandboxignore must be a regular file".into());
             }
             lines.extend(
                 fs::read_to_string(config)?
@@ -51,7 +51,7 @@ pub fn load(project: &Path, extra: &[String]) -> Result<Vec<Pattern>> {
             || text.split('/').any(|s| matches!(s, "" | "." | ".."))
         {
             return Err(format!(
-                "exclusión inválida (usa rutas relativas sin .. ni negaciones): {text:?}"
+                "invalid exclusion (use relative paths without .. or negations): {text:?}"
             )
             .into());
         }
@@ -193,7 +193,7 @@ fn walk(
         // Never silently fail to match an undecodable secret filename.
         let name = relative.to_str().ok_or_else(|| {
             format!(
-                "ruta no UTF-8 con exclusiones activas: {}; renómbrala antes de arrancar",
+                "non-UTF-8 path with active exclusions: {}; rename it before starting",
                 relative.display()
             )
         })?;
@@ -215,7 +215,7 @@ fn walk(
                     .iter()
                     .any(|p| p.directories_only && matches(&p.text, name))
             {
-                return Err(format!("exclusión sobre/a través de symlink no soportada: {name}; ignora su destino real o su directorio padre").into());
+                return Err(format!("exclusion on/through a symlink is not supported: {name}; exclude its real target or parent directory").into());
             }
         }
         if hidden {

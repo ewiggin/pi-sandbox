@@ -1,0 +1,109 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - '**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Linux x86_64 (static musl)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustup target add "$TARGET"
+
+      - name: Check formatting and lint
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
+
+      # Full integration tests require a standalone Pi installation and working
+      # user namespaces. Do not silently skip them in cargo test: run the unit
+      # test target explicitly here. See README for the local integration suite.
+      - name: Run unit tests
+        run: cargo test --locked --bin pi-sandbox
+
+      - name: Build and package static binary
+        run: ./scripts/build-release.sh
+
+      - name: Smoke-test release and verify checksums
+        shell: bash
+        run: |
+          binary="dist/pi-sandbox-$TARGET/pi-sandbox"
+          file "$binary"
+          file "$binary" | grep -q 'static'
+          "$binary" --help
+          "$binary" --version
+          # Verify fail-closed dependency diagnostics without installing Pi.
+          if PATH=/nonexistent "$binary" --check >check.log 2>&1; then
+            echo 'Dependency check unexpectedly succeeded' >&2
+            exit 1
+          fi
+          grep -q 'Bubblewrap:' check.log
+          grep -q 'Pi:' check.log
+          # Offer both the standalone executable and the documented tar package.
+          cp "$binary" "dist/pi-sandbox-linux-x86_64"
+          (cd dist && sha256sum pi-sandbox-linux-x86_64 > pi-sandbox-linux-x86_64.sha256)
+          (cd dist && sha256sum -c "pi-sandbox-$TARGET.tar.gz.sha256" && sha256sum -c pi-sandbox-linux-x86_64.sha256)
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-musl
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/pi-sandbox-linux-x86_64
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download verified assets
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64-musl
+          path: dist
+
+      - name: Create release and attach assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          # Environment variables keep tag names out of shell source code.
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG"
+          fi
+          # Re-running a workflow replaces assets instead of failing on duplicates.
+          gh release upload "$RELEASE_TAG" dist/* --clobber

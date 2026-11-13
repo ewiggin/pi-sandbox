@@ -1,0 +1,21 @@
+[package]
+name = "pi-sandbox"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Fail-closed Bubblewrap launcher for standalone Pi on Linux"
+publish = false
+
+[dependencies]
+libc = "0.2.189"
+sha2 = "0.10.9"
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -6,7 +6,11 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    os::unix::{ffi::OsStrExt, fs::DirBuilderExt},
+    io::Write,
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, symlink},
+    },
     path::{Path, PathBuf},
 };
 use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
@@ -97,13 +101,107 @@ fn private_directory(path: &Path, recursive: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn prepare(root: &Path, project: &Path, patterns: &[Pattern]) -> Result<PathBuf> {
+pub struct PreparedState {
+    pub home: PathBuf,
+    pub auth_directory: Option<PathBuf>,
+}
+
+pub fn validate_auth_profile(name: &str) -> Result<()> {
+    let bytes = name.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > 64
+        || !bytes[0].is_ascii_alphanumeric()
+        || !bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(b))
+    {
+        return Err("invalid auth profile: use 1-64 ASCII letters, digits, dots, underscores or hyphens, starting with a letter or digit".into());
+    }
+    Ok(())
+}
+
+fn prepare_auth_directory(root: &Path, name: &str) -> Result<PathBuf> {
+    let profiles = root.join("auth-profiles");
+    private_directory(&profiles, false)?;
+    let profile = profiles.join(name);
+    private_directory(&profile, false)?;
+    let auth = profile.join("auth.json");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&auth)
+    {
+        Ok(mut file) => file
+            .write_all(b"{}\n")
+            .at("initialize shared credentials", &auth)?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let meta = fs::symlink_metadata(&auth).at("inspect shared credentials", &auth)?;
+            if !meta.is_file() || meta.is_symlink() || meta.nlink() != 1 {
+                return Err(format!(
+                    "shared credentials must be a regular file without symlinks or hardlinks: {}",
+                    auth.display()
+                )
+                .into());
+            }
+        }
+        Err(e) => return Err(path_error("create shared credentials", &auth, e)),
+    }
+    Ok(profile)
+}
+
+fn link_shared_auth(home: &Path) -> Result<()> {
+    let pi = home.join(".pi");
+    private_directory(&pi, false)?;
+    let agent = pi.join("agent");
+    private_directory(&agent, false)?;
+    let auth = agent.join("auth.json");
+    let target = Path::new("/auth-profile/auth.json");
+    match fs::symlink_metadata(&auth) {
+        Ok(meta) if meta.is_symlink() => {
+            if fs::read_link(&auth).at("read shared credential link", &auth)? != target {
+                return Err(format!("unexpected shared credential link: {}", auth.display()).into());
+            }
+        }
+        Ok(_) => return Err(format!("expected a shared credential link, but found another file: {}; review it before removing it", auth.display()).into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            symlink(target, &auth).at("link shared credentials", &auth)?;
+        }
+        Err(e) => return Err(path_error("inspect shared credential link", &auth, e)),
+    }
+    Ok(())
+}
+
+pub fn prepare(
+    root: &Path,
+    project: &Path,
+    patterns: &[Pattern],
+    auth_profile: Option<&str>,
+) -> Result<PreparedState> {
+    if let Some(name) = auth_profile {
+        validate_auth_profile(name)?;
+    }
     private_directory(root, true)?;
     let state = root.join(key(project, patterns));
     private_directory(&state, false)?;
-    let home = state.join("home");
+    let (home, auth_directory) = match auth_profile {
+        None => (state.join("home"), None),
+        Some(name) => {
+            // A separate HOME prevents an opt-in shared profile from overwriting
+            // or inheriting the project's original private credentials.
+            let homes = state.join("auth-profile-homes");
+            private_directory(&homes, false)?;
+            (homes.join(name), Some(prepare_auth_directory(root, name)?))
+        }
+    };
     private_directory(&home, false)?;
-    Ok(home)
+    if auth_directory.is_some() {
+        link_shared_auth(&home)?;
+    }
+    Ok(PreparedState {
+        home,
+        auth_directory,
+    })
 }
 
 #[cfg(test)]

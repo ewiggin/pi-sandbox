@@ -422,6 +422,187 @@ fn reject_rules_on_or_through_symlinks() {
 }
 
 #[test]
+fn auth_profiles_share_credentials_but_not_project_state() {
+    let mut sandbox = Sandbox::new();
+    let original = sandbox.project.clone();
+    ok(sandbox.shell(&[], "echo private > ~/private-marker"));
+    ok(sandbox.shell(
+        &["--auth-profile", "personal"],
+        r#"
+        test ! -e ~/private-marker
+        test "$(cat ~/.pi/agent/auth.json)" = '{}'
+        printf '{"openai":{"type":"api_key","key":"dummy-test-key"}}' > ~/.pi/agent/auth.json
+        echo first > ~/marker
+        echo private-settings > ~/.pi/agent/settings.json
+        mkdir -p ~/.pi/agent/sessions
+        echo private-session > ~/.pi/agent/sessions/marker
+    "#,
+    ));
+    sandbox.project = sandbox.root.join("second-project");
+    fs::create_dir(&sandbox.project).unwrap();
+    ok(sandbox.shell(
+        &["--auth-profile", "personal"],
+        r#"
+        grep -q dummy-test-key ~/.pi/agent/auth.json
+        test ! -e ~/marker
+        test ! -e ~/.pi/agent/settings.json
+        test ! -e ~/.pi/agent/sessions/marker
+        printf '{"openai":{"type":"api_key","key":"updated-test-key"}}' > ~/.pi/agent/auth.json
+        echo second > ~/marker
+    "#,
+    ));
+    ok(sandbox.shell(
+        &["--auth-profile", "personal", "--ignore", ".env"],
+        r#"
+        grep -q updated-test-key ~/.pi/agent/auth.json
+        test ! -e ~/marker
+    "#,
+    ));
+    ok(sandbox.shell(
+        &["--auth-profile", "work"],
+        "test \"$(cat ~/.pi/agent/auth.json)\" = '{}'; test ! -e ~/marker",
+    ));
+    sandbox.project = original;
+    ok(sandbox.shell(
+        &["--auth-profile", "personal"],
+        r#"
+        grep -q updated-test-key ~/.pi/agent/auth.json
+        test "$(cat ~/marker)" = first
+        test "$(cat ~/.pi/agent/settings.json)" = private-settings
+        test "$(cat ~/.pi/agent/sessions/marker)" = private-session
+    "#,
+    ));
+    ok(sandbox.shell(&[], "test \"$(cat ~/private-marker)\" = private; test ! -e /auth-profile; test ! -e ~/.pi/agent/auth.json"));
+    let auth = sandbox.state.join("auth-profiles/personal/auth.json");
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        fs::metadata(auth).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn real_pi_reads_writes_and_locks_shared_credentials() {
+    let mut sandbox = Sandbox::new();
+    ok(sandbox.shell(
+        &["--auth-profile", "personal"],
+        r#"
+        printf '{"openai":{"type":"api_key","key":"dummy-test-key"}}' > ~/.pi/agent/auth.json
+    "#,
+    ));
+    sandbox.project = sandbox.root.join("second-project");
+    fs::create_dir(&sandbox.project).unwrap();
+    ok(sandbox.run(&[
+        "--auth-profile",
+        "personal",
+        "--",
+        "auth",
+        "check",
+        "--provider",
+        "openai",
+        "--no-refresh",
+        "--json",
+    ]));
+    // Pi must lock the canonical shared target, not each private symlink path.
+    let lock = sandbox.state.join("auth-profiles/personal/auth.json.lock");
+    fs::create_dir(&lock).unwrap();
+    let locked = sandbox.run(&[
+        "--auth-profile",
+        "personal",
+        "--",
+        "auth",
+        "logout",
+        "openai",
+    ]);
+    fs::remove_dir(&lock).unwrap();
+    assert!(
+        !locked.status.success(),
+        "Pi ignored the shared credential lock"
+    );
+    assert!(
+        fs::read_to_string(sandbox.state.join("auth-profiles/personal/auth.json"))
+            .unwrap()
+            .contains("dummy-test-key")
+    );
+    ok(sandbox.run(&[
+        "--auth-profile",
+        "personal",
+        "--",
+        "auth",
+        "logout",
+        "openai",
+    ]));
+    ok(sandbox.shell(
+        &["--auth-profile", "personal"],
+        r#"
+        test -L ~/.pi/agent/auth.json
+        test -e /auth-profile/auth.json
+        test ! -e /auth-profile/auth.json.lock
+        if grep -q dummy-test-key ~/.pi/agent/auth.json; then exit 1; fi
+    "#,
+    ));
+}
+
+#[test]
+fn invalid_auth_profiles_fail_before_creating_state() {
+    let sandbox = Sandbox::new();
+    for name in [
+        "",
+        "../escape",
+        "/absolute",
+        ".",
+        "..",
+        "with/slash",
+        "with space",
+        "-prefix",
+    ] {
+        let output = sandbox.run(&["--auth-profile", name, "--exec", "true"]);
+        assert!(!output.status.success(), "{name}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("invalid auth profile"));
+    }
+    assert!(!sandbox.state.exists());
+}
+
+#[test]
+fn shared_profile_symlinks_are_rejected() {
+    let sandbox = Sandbox::new();
+    fs::create_dir_all(&sandbox.state).unwrap();
+    let outside = sandbox.root.join("outside-profile");
+    fs::create_dir(&outside).unwrap();
+    symlink(&outside, sandbox.state.join("auth-profiles")).unwrap();
+    assert!(
+        !sandbox
+            .run(&["--auth-profile", "personal", "--exec", "true"])
+            .status
+            .success()
+    );
+    assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
+}
+
+#[test]
+fn shared_credential_symlinks_and_hardlinks_are_rejected() {
+    for hardlink in [false, true] {
+        let sandbox = Sandbox::new();
+        let profile = sandbox.state.join("auth-profiles/personal");
+        fs::create_dir_all(&profile).unwrap();
+        let outside = sandbox.root.join("outside-auth");
+        fs::write(&outside, "do not modify").unwrap();
+        if hardlink {
+            fs::hard_link(&outside, profile.join("auth.json")).unwrap();
+        } else {
+            symlink(&outside, profile.join("auth.json")).unwrap();
+        }
+        assert!(
+            !sandbox
+                .run(&["--auth-profile", "personal", "--exec", "true"])
+                .status
+                .success()
+        );
+        assert_eq!(fs::read_to_string(outside).unwrap(), "do not modify");
+    }
+}
+
+#[test]
 fn real_pi_starts_without_host_auth() {
     let sandbox = Sandbox::new();
     let version = sandbox.run(&["--", "--version"]);

@@ -9,6 +9,7 @@ pub struct Options {
     pub check: bool,
     pub pi_dir: Option<PathBuf>,
     pub state_root: Option<PathBuf>,
+    pub auth_profile: Option<String>,
     pub environment: Vec<OsString>,
     pub command: Option<Vec<OsString>>,
     pub pi_args: Vec<OsString>,
@@ -24,6 +25,7 @@ Usage: pi-sandbox [options] [-- Pi arguments...]
   --network          Share ALL host networking, including localhost
   --pi-dir PATH      Standalone Pi distribution (directory containing pi)
   --state-root PATH  Private per-project state, outside the project
+  --auth-profile NAME Share credentials across projects using this named profile
   --env NAME         Explicitly forward a host environment variable; repeatable
   --exec COMMAND ... Run a command inside instead of Pi; must be the last option
   -h, --help         Show this help
@@ -85,7 +87,12 @@ fn parse_args(args: Vec<OsString>) -> Result<Options> {
         };
         if !matches!(
             name,
-            b"--project" | b"--ignore" | b"--pi-dir" | b"--state-root" | b"--env"
+            b"--project"
+                | b"--ignore"
+                | b"--pi-dir"
+                | b"--state-root"
+                | b"--env"
+                | b"--auth-profile"
         ) {
             if !bytes.starts_with(b"-") {
                 options.pi_args.push(arg);
@@ -105,6 +112,13 @@ fn parse_args(args: Vec<OsString>) -> Result<Options> {
             b"--project" => options.project = Some(value.into()),
             b"--pi-dir" => options.pi_dir = Some(value.into()),
             b"--state-root" => options.state_root = Some(value.into()),
+            b"--auth-profile" => {
+                let name = value
+                    .into_string()
+                    .map_err(|_| "--auth-profile requires UTF-8")?;
+                crate::state::validate_auth_profile(&name)?;
+                options.auth_profile = Some(name);
+            }
             b"--env" => options.environment.push(value),
             b"--ignore" => options
                 .ignores
@@ -128,19 +142,27 @@ mod tests {
             "--ignore",
             "*.pem",
             "--network",
+            "--auth-profile=personal",
             "--",
             "--version",
         ])
         .unwrap();
         assert_eq!(opts.ignores, [".env", "*.pem"]);
         assert!(opts.network);
+        assert_eq!(opts.auth_profile.as_deref(), Some("personal"));
         assert_eq!(opts.pi_args, ["--version"]);
         let opts = parse(&["--exec", "/bin/sh", "-c", "exit 42"]).unwrap();
         assert_eq!(opts.command.unwrap(), ["/bin/sh", "-c", "exit 42"]);
     }
     #[test]
     fn bad_options_fail() {
-        for args in [&["--exec"][..], &["--project"], &["--unknown"]] {
+        for args in [
+            &["--exec"][..],
+            &["--project"],
+            &["--unknown"],
+            &["--auth-profile"],
+            &["--auth-profile", "../escape"],
+        ] {
             assert!(parse(args).is_err());
         }
     }

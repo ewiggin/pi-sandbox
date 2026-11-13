@@ -207,7 +207,12 @@ pub fn run(options: Options) -> Result<()> {
     }
     let patterns = ignores::load(&project, &options.ignores)?;
     let (masks, count) = ignores::mounts(&project, &patterns)?;
-    let sandbox_home = state::prepare(&state_root, &project, &patterns)?;
+    let prepared = state::prepare(
+        &state_root,
+        &project,
+        &patterns,
+        options.auth_profile.as_deref(),
+    )?;
     let mut command = Command::new(&bwrap);
     command.env_clear().env("PATH", "/usr/bin:/bin").args([
         "--unshare-all",
@@ -248,9 +253,17 @@ pub fn run(options: Options) -> Result<()> {
     bind(
         &mut command,
         "--bind",
-        &sandbox_home,
+        &prepared.home,
         Path::new("/home/sandbox"),
     );
+    if let Some(directory) = &prepared.auth_directory {
+        bind(
+            &mut command,
+            "--bind",
+            directory,
+            Path::new("/auth-profile"),
+        );
+    }
     bind(&mut command, "--ro-bind", &pi_dir, Path::new("/opt/pi"));
     bind(&mut command, "--bind", &project, Path::new("/workspace"));
     command.args(["--chdir", "/workspace"]).args(masks);
@@ -313,6 +326,11 @@ pub fn run(options: Options) -> Result<()> {
             "disabled"
         }
     );
+    if let Some(name) = &options.auth_profile {
+        eprintln!(
+            "pi-sandbox: shared auth profile {name:?}; credentials can be read and modified by every project using this profile"
+        );
+    }
     close_extra_fds()?;
     // Replace the launcher: no supervising runtime, signal forwarding or leaked
     // child pipes needed. There is deliberately no unsandboxed fallback.

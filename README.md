@@ -188,6 +188,57 @@ El modelo del ejemplo debe estar disponible en tu cuenta; puedes elegirlo con
 `/model`. También puedes iniciar Pi y usar `/login` dentro. Si un OAuth necesita
 callback, pega manualmente el código/URL cuando Pi lo pida.
 
+### Compartir el login entre proyectos
+
+Usa **el mismo `--auth-profile NOMBRE`** en distintos proyectos para iniciar sesión
+una sola vez y reutilizar las credenciales:
+
+```bash
+# Primer uso: inicia sesión dentro del sandbox
+pi-sandbox --project ~/c/proyecto-a --auth-profile personal --network
+# Dentro de Pi: /login
+
+# Otro proyecto, mismo login
+pi-sandbox --project ~/c/proyecto-b --auth-profile personal --network
+
+# Perfil independiente para otra cuenta
+pi-sandbox --project ~/c/trabajo --auth-profile trabajo --network
+```
+
+También puedes autenticarte sin abrir una sesión de agente:
+
+```bash
+pi-sandbox --auth-profile personal --network -- auth login openai-codex --no-browser
+```
+
+Se comparte un directorio dedicado a credenciales (`auth.json` y sus bloqueos).
+Los agentes también pueden añadir archivos a ese directorio compartido. El HOME,
+los historiales, la configuración, las extensiones y las skills continúan separados
+por proyecto, reglas de exclusión y perfil. Cambiar las exclusiones mantiene el
+login del perfil, pero utiliza un HOME/historial diferente.
+
+Los perfiles viven en:
+
+```text
+~/.local/state/pi-sandbox/auth-profiles/<nombre>/auth.json
+```
+
+`--state-root` cambia también la ubicación de estos perfiles. Los nombres admiten
+1–64 caracteres ASCII: letras, números, puntos, guiones y guiones bajos, empezando
+por letra o número. Se crea un perfil vacío si no existe; no se importan claves del
+HOME real ni de los entornos privados anteriores. El primer login del perfil es
+independiente de los logins que ya tuvieras en cada proyecto.
+
+**Seguridad:** todos los agentes que usen el mismo perfil pueden leer, cambiar o
+borrar sus credenciales. El perfil es un dominio de confianza: no lo compartas con
+repositorios no confiables. Cerrar sesión o revocar credenciales afecta a todos los
+proyectos del perfil. Mantén cuentas/claves dedicadas y con límites.
+
+Sin `--auth-profile`, el comportamiento anterior no cambia: credenciales privadas
+por proyecto y exclusiones, sin acceso a los perfiles compartidos. Tampoco se
+sobrescriben sus logins o historiales al probar un perfil compartido. La lectura,
+escritura y el bloqueo compartido de credenciales se han probado con Pi 1.5.2.
+
 ### Excluir rutas
 
 Por defecto se incluye toda la carpeta actual. `--project` cambia esa carpeta
@@ -255,13 +306,14 @@ Limitaciones de esta primera implementación:
   los nombres de entradas deben ser UTF-8; si no lo son, el arranque falla en vez
   de dejar un posible secreto sin proteger. La ruta base sí admite bytes no UTF-8.
 - Cambiar las reglas crea un HOME/estado independiente para no revelar sesiones
-  previas que pudieron leer datos ahora excluidos. Tendrás que iniciar sesión de
-  nuevo con esa combinación de reglas. Quitar una regla vuelve al estado anterior
+  previas que pudieron leer datos ahora excluidos. Sin `--auth-profile`, tendrás
+  que iniciar sesión de nuevo con esa combinación de reglas. Si eliges un perfil
+  compartido, conserva su login explícitamente, pero no el historial anterior. Quitar una regla vuelve al estado anterior
   correspondiente; las exclusiones no borran datos del host ni revocan secretos.
 
 No se copian `~/.pi`, sesiones, extensiones, skills, tokens ni claves del host.
-El estado es independiente **por ruta absoluta de proyecto y reglas de exclusión**
-y persiste en:
+Sin un perfil compartido, el estado es independiente **por ruta absoluta de proyecto
+y reglas de exclusión** y persiste en:
 
 ```text
 ~/.local/state/pi-sandbox/<sha256-de-la-identidad>/home/
@@ -298,7 +350,8 @@ Actualiza Pi desde el host: su instalación está montada en solo lectura.
 | Recurso | Acceso |
 | --- | --- |
 | Proyecto elegido | Lectura y escritura, salvo rutas protegidas por exclusiones |
-| HOME privado de este proyecto | Lectura y escritura persistente |
+| HOME privado de este proyecto y perfil | Lectura y escritura persistente |
+| Credenciales compartidas | Solo si eliges explícitamente `--auth-profile NOMBRE` |
 | `/tmp`, `/run` privados | Efímeros |
 | `/usr`, compatibilidad `/bin`/`lib`, instalación de Pi | Solo lectura |
 | Certificados del sistema y configuración mínima | Solo lectura |
@@ -378,7 +431,9 @@ frente a un servidor local, red explícita, bloqueo de namespaces anidados, cód
 de salida y arranque del binario real de Pi. También verifican la suma de
 exclusiones CLI/archivo, los globs, la escritura persistente en rutas permitidas,
 los aliases por symlink/hardlink, los renombrados de padres, las reglas inválidas
-y la separación de estado por exclusiones. Se comprueba también la compatibilidad
+y la separación de estado por exclusiones. Se comprueban los perfiles compartidos,
+la separación del resto del HOME y los bloqueos del archivo de credenciales usando
+Pi real, sin llamar a ningún proveedor. Se comprueba también la compatibilidad
 del estado con el launcher anterior y la ausencia de fallback si Bubblewrap falla.
 Necesitan un host Linux donde Bubblewrap funcione y Pi esté instalado; no se omiten
 silenciosamente si el aislamiento falla.

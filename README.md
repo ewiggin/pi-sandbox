@@ -2,9 +2,44 @@
 
 Launcher **escrito en Rust** para ejecutar la distribución autónoma de Pi en un
 filesystem mínimo en Linux. Un único binario, sin Python ni runtime de Rust en el
-equipo receptor. No instala nada automáticamente ni modifica tu configuración de
-escritorio. El aislamiento lo aplica Bubblewrap al proceso de Pi y a todos sus
+equipo receptor. El launcher no instala dependencias ni modifica tu configuración
+de escritorio. El aislamiento lo aplica Bubblewrap al proceso de Pi y a todos sus
 descendientes, no un prompt o una extensión. Docker queda para otra versión.
+
+## Instalación
+
+Instala la última release para **Linux x86_64** con:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ewiggin/pi-sandbox/main/install.sh | sh
+```
+
+El instalador descarga el binario, verifica su SHA-256 y lo instala en
+`~/.local/bin/pi-sandbox`, sin `sudo`, Rust ni Python. Después comprueba Pi y
+Bubblewrap; si faltan, muestra cómo instalarlos, pero no los instala por ti.
+Necesita `curl`, `sha256sum` y las herramientas básicas del sistema.
+
+Si `~/.local/bin` no está en tu `PATH`, añade esto a tu sesión (y al archivo de
+inicio de tu shell si quieres conservarlo):
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+pi-sandbox --check
+```
+
+Para actualizar, repite el comando de instalación. Se sustituye el ejecutable
+atómicamente y se conservan los logins y sesiones. Para una versión concreta o
+un directorio distinto, puedes pasar variables al instalador:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ewiggin/pi-sandbox/main/install.sh |
+  PI_SANDBOX_VERSION=v0.1.0 PI_SANDBOX_INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+El comando ejecuta código del repositorio: úsalo solo si confías en él. Puedes
+[revisar install.sh](https://github.com/ewiggin/pi-sandbox/blob/main/install.sh)
+antes de ejecutarlo. El checksum detecta corrupción, pero no sustituye una firma.
+La instalación requiere una release publicada con el binario y su checksum.
 
 ## Requisitos de ejecución
 
@@ -100,8 +135,9 @@ Compila en Ubuntu el binario estático Linux x86_64 y crea una GitHub Release co
 - `pi-sandbox-x86_64-unknown-linux-musl.tar.gz`: binario y README.
 - `pi-sandbox-x86_64-unknown-linux-musl.tar.gz.sha256`: checksum del paquete.
 
-Antes de publicar comprueba formato, Clippy, pruebas unitarias, enlace estático,
-arranque básico, diagnóstico de dependencias ausentes y checksums. Las pruebas de
+Antes de publicar comprueba formato, Clippy, pruebas unitarias, pruebas offline
+del instalador, enlace estático, arranque básico, diagnóstico de dependencias
+ausentes y checksums. Las pruebas de
 integración completas necesitan Pi y namespaces de usuario y se ejecutan localmente
 como se indica más abajo; el workflow no instala ni ejecuta Pi fuera del sandbox.
 

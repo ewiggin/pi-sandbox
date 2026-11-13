@@ -2,6 +2,7 @@
 
 mod cli;
 mod dependencies;
+mod diagnostics;
 mod ignores;
 mod sandbox;
 mod state;

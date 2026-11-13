@@ -1,4 +1,8 @@
-use crate::{Result, ignores::Pattern};
+use crate::{
+    Result,
+    diagnostics::{PathContext, path_error},
+    ignores::Pattern,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -82,9 +86,13 @@ fn private_directory(path: &Path, recursive: bool) -> Result<()> {
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let mut builder = fs::DirBuilder::new();
-            builder.mode(0o700).recursive(recursive).create(path)?;
+            builder
+                .mode(0o700)
+                .recursive(recursive)
+                .create(path)
+                .at("create private state directory", path)?;
         }
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(path_error("inspect private state directory", path, e)),
     }
     Ok(())
 }

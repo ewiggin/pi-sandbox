@@ -386,6 +386,30 @@ fn reject_unsafe_ignores_and_symlink_config() {
 }
 
 #[test]
+fn recursive_name_exclusions_allow_unrelated_symlinks_and_still_mask_targets() {
+    let sandbox = Sandbox::new();
+    sandbox.write("authentik/packages/client-ts/allowed", "visible");
+    sandbox.write("authentik/packages/client-ts/key.pem", "private");
+    sandbox.write("authentik/postgres-data/token", "private");
+    fs::create_dir_all(sandbox.project.join("authentik/web/packages")).unwrap();
+    symlink(
+        "../../packages/client-ts",
+        sandbox.project.join("authentik/web/packages/client-ts"),
+    )
+    .unwrap();
+    symlink("../postgres-data", sandbox.project.join("authentik/web/db")).unwrap();
+    ok(sandbox.shell(&["--ignore", "**/postgres-data", "--ignore", "**/**/*.pem"], r#"
+        test "$(cat authentik/web/packages/client-ts/allowed)" = visible
+        for path in authentik/postgres-data/token authentik/web/db/token; do
+            if cat "$path" 2>/dev/null; then exit 1; fi
+        done
+        for path in authentik/packages/client-ts/key.pem authentik/web/packages/client-ts/key.pem; do
+            if data=$(cat "$path" 2>/dev/null); then test -z "$data"; fi
+        done
+    "#));
+}
+
+#[test]
 fn reject_rules_on_or_through_symlinks() {
     let sandbox = Sandbox::new();
     sandbox.write("actual/secret", "private");

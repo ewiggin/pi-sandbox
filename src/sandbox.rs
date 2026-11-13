@@ -1,4 +1,10 @@
-use crate::{Result, cli::Options, dependencies, ignores, state};
+use crate::{
+    Result,
+    cli::Options,
+    dependencies,
+    diagnostics::{PathContext, path_error},
+    ignores, state,
+};
 use std::{
     env,
     ffi::{OsStr, OsString},
@@ -24,7 +30,9 @@ fn resolve(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        env::current_dir()?.join(path)
+        env::current_dir()
+            .at("resolve current directory", Path::new("."))?
+            .join(path)
     };
     let mut result = PathBuf::from("/");
     let mut pending: std::collections::VecDeque<OsString> = absolute
@@ -47,7 +55,7 @@ fn resolve(path: &Path) -> Result<PathBuf> {
                 if links > 40 {
                     return Err("too many symbolic links in path".into());
                 }
-                let target = fs::read_link(&result)?;
+                let target = fs::read_link(&result).at("read state path symbolic link", &result)?;
                 result.pop();
                 if target.is_absolute() {
                     result = PathBuf::from("/");
@@ -60,7 +68,7 @@ fn resolve(path: &Path) -> Result<PathBuf> {
             }
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(path_error("inspect state path", &result, e)),
         }
     }
     Ok(result)
@@ -75,7 +83,7 @@ fn system_file(command: &mut Command, name: &str) -> Result<()> {
     match fs::canonicalize(path) {
         Ok(source) => bind(command, "--ro-bind", &source, path),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(path_error("resolve system file", path, e)),
     }
     Ok(())
 }
@@ -105,7 +113,11 @@ fn close_extra_fds() -> Result<()> {
     }
     // Older kernels may not implement close_range/CLOEXEC. Enumerate /proc;
     // inability to sanitize descriptors is an error, never a silent fallback.
-    let fds = fs::read_dir("/proc/self/fd")?
+    let fds = fs::read_dir("/proc/self/fd")
+        .at(
+            "list inherited file descriptors",
+            Path::new("/proc/self/fd"),
+        )?
         .map(|e| {
             let e = e?;
             e.file_name()
@@ -113,7 +125,11 @@ fn close_extra_fds() -> Result<()> {
                 .and_then(|s| s.parse::<i32>().ok())
                 .ok_or_else(|| std::io::Error::other("invalid file descriptor in /proc/self/fd"))
         })
-        .collect::<std::io::Result<Vec<_>>>()?;
+        .collect::<std::io::Result<Vec<_>>>()
+        .at(
+            "read inherited file descriptor entries",
+            Path::new("/proc/self/fd"),
+        )?;
     for fd in fds.into_iter().filter(|fd| *fd > 2) {
         // SAFETY: fcntl operates on numeric FDs only; EBADF may be the already
         // closed read_dir FD and is harmless. Any other failure is fatal.
@@ -148,11 +164,13 @@ pub fn run(options: Options) -> Result<()> {
     let bwrap = dependencies.bwrap;
     let pi_dir = dependencies.pi_dir;
     let home = env::var_os("HOME").ok_or("HOME is not set")?;
-    let home = fs::canonicalize(home)?;
-    let project = fs::canonicalize(expand_user(
-        &options.project.unwrap_or(env::current_dir()?),
-        &home,
-    ))?;
+    let home_path = PathBuf::from(home);
+    let home = fs::canonicalize(&home_path).at("resolve HOME directory", &home_path)?;
+    let project_path = match options.project {
+        Some(path) => expand_user(&path, &home),
+        None => env::current_dir().at("resolve current project directory", Path::new("."))?,
+    };
+    let project = fs::canonicalize(&project_path).at("resolve project directory", &project_path)?;
     if !project.is_dir() {
         return Err("--project must be a directory".into());
     }
@@ -190,7 +208,7 @@ pub fn run(options: Options) -> Result<()> {
     let patterns = ignores::load(&project, &options.ignores)?;
     let (masks, count) = ignores::mounts(&project, &patterns)?;
     let sandbox_home = state::prepare(&state_root, &project, &patterns)?;
-    let mut command = Command::new(bwrap);
+    let mut command = Command::new(&bwrap);
     command.env_clear().env("PATH", "/usr/bin:/bin").args([
         "--unshare-all",
         "--unshare-user",
@@ -213,11 +231,14 @@ pub fn run(options: Options) -> Result<()> {
         let path = Path::new(name);
         match fs::symlink_metadata(path) {
             Ok(meta) if meta.is_symlink() => {
-                command.arg("--symlink").arg(fs::read_link(path)?).arg(path);
+                command
+                    .arg("--symlink")
+                    .arg(fs::read_link(path).at("read system symbolic link", path)?)
+                    .arg(path);
             }
             Ok(_) => bind(&mut command, "--ro-bind", path, path),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(path_error("inspect system path", path, e)),
         }
     }
     command.args([
@@ -295,7 +316,7 @@ pub fn run(options: Options) -> Result<()> {
     close_extra_fds()?;
     // Replace the launcher: no supervising runtime, signal forwarding or leaked
     // child pipes needed. There is deliberately no unsandboxed fallback.
-    Err(command.exec().into())
+    Err(path_error("execute Bubblewrap", &bwrap, command.exec()))
 }
 
 #[cfg(test)]

@@ -42,10 +42,10 @@ jobs:
       # Full integration tests require a standalone Pi installation and working
       # user namespaces. Do not silently skip them in cargo test: run the unit
       # test target explicitly here. See README for the local integration suite.
-      - name: Run unit and offline installer tests
+      - name: Run unit and offline diagnostic/installer tests
         run: |
           sh -n install.sh
-          cargo test --locked --bin pi-sandbox --test installer
+          cargo test --locked --bin pi-sandbox --test installer --test diagnostics
 
       - name: Build and package static binary
         run: ./scripts/build-release.sh

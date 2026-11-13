@@ -1,4 +1,7 @@
-use crate::Result;
+use crate::{
+    Result,
+    diagnostics::{PathContext, path_error},
+};
 use std::{
     collections::HashSet,
     ffi::OsString,
@@ -25,7 +28,8 @@ pub fn load(project: &Path, extra: &[String]) -> Result<Vec<Pattern>> {
                 return Err(".pi-sandboxignore must be a regular file".into());
             }
             lines.extend(
-                fs::read_to_string(config)?
+                fs::read_to_string(&config)
+                    .at("read ignore file", &config)?
                     .lines()
                     .map(str::trim)
                     .filter(|s| !s.is_empty() && !s.starts_with('#'))
@@ -33,7 +37,7 @@ pub fn load(project: &Path, extra: &[String]) -> Result<Vec<Pattern>> {
             );
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(path_error("inspect ignore file", &config, e)),
     }
     lines.extend_from_slice(extra);
     let mut patterns = Vec::new();
@@ -185,7 +189,13 @@ fn walk(
     excluded: &mut HashSet<PathBuf>,
     hidden_inodes: &mut HashSet<(u64, u64)>,
 ) -> Result<()> {
-    let mut children = fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
+    let mut children = fs::read_dir(directory)
+        .at(
+            "scan project directory for exclusions and hardlink aliases",
+            directory,
+        )?
+        .collect::<std::io::Result<Vec<_>>>()
+        .at("read project directory entries", directory)?;
     children.sort_by_key(|e| e.file_name());
     for child in children {
         let path = child.path();
@@ -197,7 +207,7 @@ fn walk(
                 relative.display()
             )
         })?;
-        let metadata = fs::symlink_metadata(&path)?;
+        let metadata = fs::symlink_metadata(&path).at("inspect project entry", &path)?;
         let is_dir = metadata.is_dir();
         let hidden = inherited
             || patterns
@@ -207,7 +217,15 @@ fn walk(
             let traversed = patterns.iter().any(|p| {
                 let parts: Vec<_> = p.text.split('/').collect();
                 let relative_parts: Vec<_> = name.split('/').collect();
-                (1..parts.len()).any(|n| match_parts(&parts[..n], &relative_parts))
+                (1..parts.len()).any(|n| {
+                    // A prefix made only of ** imposes no path constraint.
+                    // For **/postgres-data, the real directory is masked wherever
+                    // it occurs; an unrelated symlink cannot bypass that mask.
+                    // Keep rejecting aliases that match a meaningful prefix,
+                    // e.g. src -> actual with the rule src/**/*.key.
+                    parts[..n].iter().any(|part| *part != "**")
+                        && match_parts(&parts[..n], &relative_parts)
+                })
             });
             if hidden
                 || traversed
